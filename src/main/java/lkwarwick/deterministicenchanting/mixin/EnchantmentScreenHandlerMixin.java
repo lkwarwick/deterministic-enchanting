@@ -76,7 +76,7 @@ public class EnchantmentScreenHandlerMixin {
                 var enchantment = new EnchantmentInstance(holder, level);
                 var name = definition.description().getString();
                 var key = name + " " + level;
-                var requiredPower = definition.getMinCost(level);
+                var requiredPower = minimumBookshelfPower(definition, level);
 
                 requiredPowers.putIfAbsent(key, requiredPower);
                 states.putIfAbsent(
@@ -86,29 +86,30 @@ public class EnchantmentScreenHandlerMixin {
             }
         });
 
-        DeterministicEnchanting.LOGGER.info(
-            "Discovered {} deterministic enchantment options for slot {} (bookshelf power: {}, vanilla cost: {}, item: {})",
-            requiredPowers.size(),
-            slot,
-            bookshelfPower[0],
-            enchantmentCost,
-            itemStack.getItem()
-        );
-
-        requiredPowers.forEach((name, requiredPower) ->
+        if (slot == 0) {
             DeterministicEnchanting.LOGGER.info(
-                "  {} -> state {}, minimum power {}",
-                name,
-                states.get(name),
-                requiredPower
-            )
-        );
+                "Discovered {} deterministic enchantment options (bookshelf power: {}, vanilla cost for slot 0: {}, item: {})",
+                requiredPowers.size(),
+                bookshelfPower[0],
+                enchantmentCost,
+                itemStack.getItem()
+            );
+
+            requiredPowers.forEach((name, requiredPower) ->
+                DeterministicEnchanting.LOGGER.info(
+                    "  {} -> state {}, minimum bookshelf power {}",
+                    name,
+                    states.get(name),
+                    requiredPower
+                )
+            );
+        }
     }
 
     private static EnchantmentState stateFor(
         EnchantmentInstance enchantment,
         ItemStack itemStack,
-        int requiredPower,
+        int requiredBookshelfPower,
         int bookshelfPower,
         Player player,
         int enchantmentCost
@@ -118,7 +119,7 @@ public class EnchantmentScreenHandlerMixin {
             return EnchantmentState.ALREADY_PRESENT;
         }
 
-        if (requiredPower > bookshelfPower) {
+        if (requiredBookshelfPower > bookshelfPower) {
             return EnchantmentState.INSUFFICIENT_BOOKSHELVES;
         }
 
@@ -131,6 +132,45 @@ public class EnchantmentScreenHandlerMixin {
         }
 
         return EnchantmentState.COMPATIBLE;
+    }
+
+    private static int minimumBookshelfPower(net.minecraft.world.item.enchantment.Enchantment enchantment, int level) {
+        for (int bookshelfPower = 0; bookshelfPower <= 30; bookshelfPower++) {
+            if (canGenerateAtPower(enchantment, level, bookshelfPower)) {
+                return bookshelfPower;
+            }
+        }
+
+        return 31;
+    }
+
+    private static boolean canGenerateAtPower(
+        net.minecraft.world.item.enchantment.Enchantment enchantment,
+        int level,
+        int bookshelfPower
+    ) {
+        var minimumCost = enchantment.getMinCost(level);
+        var maximumCost = enchantment.getMaxCost(level);
+
+        for (int firstRoll = 0; firstRoll < 8; firstRoll++) {
+            for (int secondRoll = 0; secondRoll <= bookshelfPower; secondRoll++) {
+                var baseCost = firstRoll + 1 + (bookshelfPower >> 1) + secondRoll;
+
+                for (int slot = 0; slot < 3; slot++) {
+                    var cost = switch (slot) {
+                        case 0 -> Math.max(baseCost / 3, 1);
+                        case 1 -> baseCost * 2 / 3 + 1;
+                        default -> Math.max(baseCost, bookshelfPower * 2);
+                    };
+
+                    if (cost >= minimumCost && cost <= maximumCost) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     @Inject(method = "stillValid", at = @At("HEAD"))
