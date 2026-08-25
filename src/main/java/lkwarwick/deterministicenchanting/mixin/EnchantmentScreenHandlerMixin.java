@@ -29,7 +29,6 @@ import java.util.Map;
 @Mixin(EnchantmentMenu.class)
 public class EnchantmentScreenHandlerMixin implements DeterministicEnchantingMenu {
     private static final int MAX_BOOKSHELF_POWER = 30;
-    private static final int DETERMINISTIC_LAPIS_COST = 1;
 
     @Shadow
     @Final
@@ -206,7 +205,6 @@ public class EnchantmentScreenHandlerMixin implements DeterministicEnchantingMen
         }
 
         var itemStack = enchantSlots.getItem(0);
-        var lapisStack = enchantSlots.getItem(1);
         var definition = enchantment.value();
 
         if (itemStack.isEmpty() || !definition.canEnchant(itemStack)) {
@@ -240,19 +238,8 @@ public class EnchantmentScreenHandlerMixin implements DeterministicEnchantingMen
             return rejectSelection(player, "insufficient experience levels");
         }
 
-        if (!player.hasInfiniteMaterials() && lapisStack.getCount() < DETERMINISTIC_LAPIS_COST) {
-            return rejectSelection(player, "insufficient lapis");
-        }
-
         player.onEnchantmentPerformed(itemStack, experienceCost);
         itemStack.enchant(enchantment, level);
-
-        if (!player.hasInfiniteMaterials()) {
-            lapisStack.consume(DETERMINISTIC_LAPIS_COST, player);
-            if (lapisStack.isEmpty()) {
-                enchantSlots.setItem(1, ItemStack.EMPTY);
-            }
-        }
 
         enchantSlots.setChanged();
         ((EnchantmentMenu) (Object) this).slotsChanged(enchantSlots);
