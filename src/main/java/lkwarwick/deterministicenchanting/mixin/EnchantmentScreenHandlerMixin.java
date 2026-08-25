@@ -7,8 +7,11 @@ import net.minecraft.world.inventory.EnchantmentMenu;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.EnchantingTableBlock;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.core.Holder;
+import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.EnchantmentInstance;
+import lkwarwick.deterministicenchanting.DeterministicEnchantingMenu;
 import lkwarwick.deterministicenchanting.DeterministicEnchanting;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -24,7 +27,14 @@ import java.util.List;
 import java.util.Map;
 
 @Mixin(EnchantmentMenu.class)
-public class EnchantmentScreenHandlerMixin {
+public class EnchantmentScreenHandlerMixin implements DeterministicEnchantingMenu {
+    private static final int MAX_BOOKSHELF_POWER = 30;
+    private static final int DETERMINISTIC_LAPIS_COST = 1;
+
+    @Shadow
+    @Final
+    private net.minecraft.world.Container enchantSlots;
+
     @Shadow
     @Final
     private ContainerLevelAccess access;
@@ -139,12 +149,12 @@ public class EnchantmentScreenHandlerMixin {
         return EnchantmentState.COMPATIBLE;
     }
 
-    private static int deterministicExperienceCost(net.minecraft.world.item.enchantment.Enchantment enchantment, int level) {
+    private static int deterministicExperienceCost(Enchantment enchantment, int level) {
         return enchantment.getMinCost(level);
     }
 
-    private static int minimumBookshelfPower(net.minecraft.world.item.enchantment.Enchantment enchantment, int level) {
-        for (int bookshelfPower = 0; bookshelfPower <= 30; bookshelfPower++) {
+    private static int minimumBookshelfPower(Enchantment enchantment, int level) {
+        for (int bookshelfPower = 0; bookshelfPower <= MAX_BOOKSHELF_POWER; bookshelfPower++) {
             if (canGenerateAtPower(enchantment, level, bookshelfPower)) {
                 return bookshelfPower;
             }
@@ -154,7 +164,7 @@ public class EnchantmentScreenHandlerMixin {
     }
 
     private static boolean canGenerateAtPower(
-        net.minecraft.world.item.enchantment.Enchantment enchantment,
+        Enchantment enchantment,
         int level,
         int bookshelfPower
     ) {
@@ -185,6 +195,96 @@ public class EnchantmentScreenHandlerMixin {
     @Inject(method = "stillValid", at = @At("HEAD"))
     private void rememberPlayer(Player player, CallbackInfoReturnable<Boolean> cir) {
         deterministicEnchanting$player = player;
+    }
+
+    @Override
+    public boolean applyDeterministicEnchantment(Player player, Holder<Enchantment> enchantment, int level) {
+        deterministicEnchanting$player = player;
+
+        if (!((EnchantmentMenu) (Object) this).stillValid(player)) {
+            return rejectSelection(player, "menu is no longer valid");
+        }
+
+        var itemStack = enchantSlots.getItem(0);
+        var lapisStack = enchantSlots.getItem(1);
+        var definition = enchantment.value();
+
+        if (itemStack.isEmpty() || !definition.canEnchant(itemStack)) {
+            return rejectSelection(player, "item is not compatible");
+        }
+
+        if (level < definition.getMinLevel() || level > definition.getMaxLevel()) {
+            return rejectSelection(player, "enchantment level is invalid");
+        }
+
+        var currentLevel = EnchantmentHelper.getItemEnchantmentLevel(enchantment, itemStack);
+        if (currentLevel >= level) {
+            return rejectSelection(player, "item already has this level");
+        }
+
+        var otherEnchantments = itemStack.getEnchantments().keySet().stream()
+            .filter(existing -> !existing.equals(enchantment))
+            .toList();
+        if (!EnchantmentHelper.isEnchantmentCompatible(otherEnchantments, enchantment)) {
+            return rejectSelection(player, "enchantment conflicts with the item");
+        }
+
+        var bookshelfPower = bookshelfPower();
+        var requiredBookshelfPower = minimumBookshelfPower(definition, level);
+        if (requiredBookshelfPower > bookshelfPower) {
+            return rejectSelection(player, "insufficient bookshelf power");
+        }
+
+        var experienceCost = deterministicExperienceCost(definition, level);
+        if (!player.hasInfiniteMaterials() && player.experienceLevel < experienceCost) {
+            return rejectSelection(player, "insufficient experience levels");
+        }
+
+        if (!player.hasInfiniteMaterials() && lapisStack.getCount() < DETERMINISTIC_LAPIS_COST) {
+            return rejectSelection(player, "insufficient lapis");
+        }
+
+        player.onEnchantmentPerformed(itemStack, experienceCost);
+        itemStack.enchant(enchantment, level);
+
+        if (!player.hasInfiniteMaterials()) {
+            lapisStack.consume(DETERMINISTIC_LAPIS_COST, player);
+            if (lapisStack.isEmpty()) {
+                enchantSlots.setItem(1, ItemStack.EMPTY);
+            }
+        }
+
+        enchantSlots.setChanged();
+        ((EnchantmentMenu) (Object) this).slotsChanged(enchantSlots);
+        DeterministicEnchanting.LOGGER.info(
+            "Applied deterministic enchantment {} level {} to {} for {}",
+            definition.description().getString(),
+            level,
+            itemStack.getItem(),
+            player.getPlainTextName()
+        );
+        return true;
+    }
+
+    private int bookshelfPower() {
+        int[] power = {0};
+        access.execute((level, tablePosition) -> {
+            for (var bookshelfOffset : EnchantingTableBlock.BOOKSHELF_OFFSETS) {
+                if (EnchantingTableBlock.isValidBookShelf(level, tablePosition, bookshelfOffset)) {
+                    power[0]++;
+                }
+            }
+        });
+        return power[0];
+    }
+
+    private boolean rejectSelection(Player player, String reason) {
+        DeterministicEnchanting.LOGGER.info(
+            "Rejected deterministic enchantment selection for {}: {}",
+            player.getPlainTextName(),
+            reason
+        );
+        return false;
     }
 
     @Redirect(

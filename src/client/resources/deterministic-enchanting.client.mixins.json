@@ -3,7 +3,8 @@
 	"package": "lkwarwick.deterministicenchanting.client.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
-		"ExampleClientMixin"
+		"ExampleClientMixin",
+		"DeterministicEnchantingScreenMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

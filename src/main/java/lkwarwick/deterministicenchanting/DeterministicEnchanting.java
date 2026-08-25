@@ -1,8 +1,11 @@
 package lkwarwick.deterministicenchanting;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 
 import net.minecraft.resources.Identifier;
+import net.minecraft.core.registries.Registries;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +24,24 @@ public class DeterministicEnchanting implements ModInitializer {
 		// However, some things (like resources) may still be uninitialized.
 		// Proceed with mild caution.
 
-		LOGGER.info("Hello Fabric world!");
+		PayloadTypeRegistry.serverboundPlay().register(
+			DeterministicEnchantingSelectionPayload.TYPE,
+			DeterministicEnchantingSelectionPayload.CODEC
+		);
+		ServerPlayNetworking.registerGlobalReceiver(
+			DeterministicEnchantingSelectionPayload.TYPE,
+			(payload, context) -> context.server().execute(() -> {
+				var player = context.player();
+				if (player.containerMenu.containerId != payload.menuId()
+					|| !(player.containerMenu instanceof DeterministicEnchantingMenu menu)) {
+					return;
+				}
+
+				player.registryAccess().lookupOrThrow(Registries.ENCHANTMENT)
+					.get(payload.enchantment())
+					.ifPresent(holder -> menu.applyDeterministicEnchantment(player, holder, payload.level()));
+			})
+		);
 	}
 
 	public static Identifier id(String path) {
