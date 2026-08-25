@@ -14,20 +14,24 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import lkwarwick.deterministicenchanting.DeterministicEnchantingSelectionPayload;
+import lkwarwick.deterministicenchanting.client.DeterministicEnchantingScrollable;
 
 import java.util.List;
 import java.util.Objects;
 
 @Mixin(EnchantmentScreen.class)
-public class DeterministicEnchantingScreenMixin {
+public class DeterministicEnchantingScreenMixin implements DeterministicEnchantingScrollable {
     @Unique
-    private static final int PANEL_WIDTH = 164;
+    private static final int PANEL_WIDTH = 180;
+
+    @Unique
+    private static final int PANEL_HEIGHT = 260;
 
     @Unique
     private static final int ROW_HEIGHT = 16;
 
     @Unique
-    private static final int GROUP_GAP = 5;
+    private static final int GROUP_GAP = 10;
 
     @Unique
     private static final int GROUP_HEADER_HEIGHT = 10;
@@ -39,7 +43,13 @@ public class DeterministicEnchantingScreenMixin {
     private static final int HEADER_LEVEL_GAP = 4;
 
     @Unique
-    private static final int MAX_VISIBLE_ROWS = 22;
+    private static final int PANEL_PADDING = 6;
+
+    @Unique
+    private static final int SCROLL_STEP = 16;
+
+    @Unique
+    private int deterministicEnchanting$scrollOffset;
 
     @Unique
     private record DeterministicEnchanting$Option(Identifier id, int level, String name, String detail, int cost, String state, int color) {
@@ -66,19 +76,21 @@ public class DeterministicEnchantingScreenMixin {
 
         var options = deterministicEnchanting$options(itemStack);
 
-        var visibleOptions = Math.min(options.size(), MAX_VISIBLE_ROWS);
-        var panelHeight = deterministicEnchanting$contentHeight(options, visibleOptions) + 12;
+        var contentHeight = deterministicEnchanting$contentHeight(options, options.size());
+        var maxScroll = Math.max(0, contentHeight - (PANEL_HEIGHT - PANEL_PADDING * 2));
+        deterministicEnchanting$scrollOffset = Math.min(deterministicEnchanting$scrollOffset, maxScroll);
         var panelX = deterministicEnchanting$panelX(graphics.guiWidth());
-        var panelY = Math.max(4, (graphics.guiHeight() - panelHeight) / 2);
+        var panelY = Math.max(4, (graphics.guiHeight() - PANEL_HEIGHT) / 2);
 
-        graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + panelHeight, 0xDD101820);
-        graphics.outline(panelX, panelY, PANEL_WIDTH, panelHeight, 0xFF8FA6B8);
+        graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + PANEL_HEIGHT, 0xDD101820);
+        graphics.outline(panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, 0xFF8FA6B8);
 
-        for (int index = 0; index < visibleOptions; index++) {
+        graphics.enableScissor(panelX + 1, panelY + PANEL_PADDING, panelX + PANEL_WIDTH - 1, panelY + PANEL_HEIGHT - PANEL_PADDING);
+        for (int index = 0; index < options.size(); index++) {
             var option = options.get(index);
-            var rowY = panelY + 6 + deterministicEnchanting$rowOffset(options, index);
+            var rowY = panelY + PANEL_PADDING + deterministicEnchanting$rowOffset(options, index) - deterministicEnchanting$scrollOffset;
             if (index == 0 || !Objects.equals(option.id(), options.get(index - 1).id())) {
-                var headerY = rowY - GROUP_HEADER_HEIGHT;
+                var headerY = rowY - GROUP_HEADER_HEIGHT - HEADER_LEVEL_GAP;
                 var headerColor = 0xFFE5C07B;
                 var name = Objects.requireNonNull(option.name());
                 graphics.text(minecraft.font, name, panelX + CONTENT_INSET, headerY, headerColor);
@@ -106,15 +118,16 @@ public class DeterministicEnchantingScreenMixin {
                 stateColor
             );
         }
+        graphics.disableScissor();
 
-        if (options.size() > MAX_VISIBLE_ROWS) {
-            graphics.text(
-                minecraft.font,
-                "+" + (options.size() - MAX_VISIBLE_ROWS) + " more",
-                panelX + 6,
-                panelY + panelHeight - 12,
-                0xFF8FA6B8
-            );
+        if (maxScroll > 0) {
+            var trackX = panelX + PANEL_WIDTH - 5;
+            var trackY = panelY + PANEL_PADDING;
+            var trackHeight = PANEL_HEIGHT - PANEL_PADDING * 2;
+            var thumbHeight = Math.max(24, trackHeight * trackHeight / contentHeight);
+            var thumbY = trackY + (trackHeight - thumbHeight) * deterministicEnchanting$scrollOffset / maxScroll;
+            graphics.fill(trackX, trackY, trackX + 2, trackY + trackHeight, 0x664C566A);
+            graphics.fill(trackX, thumbY, trackX + 2, thumbY + thumbHeight, 0xFF8FA6B8);
         }
     }
 
@@ -130,13 +143,16 @@ public class DeterministicEnchantingScreenMixin {
         }
 
         var options = deterministicEnchanting$options(((EnchantmentScreen) (Object) this).getMenu().getSlot(0).getItem());
-        var visibleOptions = Math.min(options.size(), MAX_VISIBLE_ROWS);
-        var panelHeight = deterministicEnchanting$contentHeight(options, visibleOptions) + 12;
         var panelX = deterministicEnchanting$panelX(minecraft.getWindow().getGuiScaledWidth());
-        var panelY = Math.max(4, (minecraft.getWindow().getGuiScaledHeight() - panelHeight) / 2);
-        var row = deterministicEnchanting$rowAt(options, visibleOptions, event.y() - panelY - 6);
+        var panelY = Math.max(4, (minecraft.getWindow().getGuiScaledHeight() - PANEL_HEIGHT) / 2);
+        var row = deterministicEnchanting$rowAt(
+            options,
+            options.size(),
+            event.y() - panelY - PANEL_PADDING + deterministicEnchanting$scrollOffset
+        );
 
         if (event.x() < panelX || event.x() >= panelX + PANEL_WIDTH
+            || event.y() < panelY + PANEL_PADDING || event.y() >= panelY + PANEL_HEIGHT - PANEL_PADDING
             || row < 0) {
             return;
         }
@@ -148,6 +164,35 @@ public class DeterministicEnchantingScreenMixin {
             option.level()
         ));
         cir.setReturnValue(true);
+    }
+
+    @Override
+    public boolean deterministicEnchanting$scroll(
+        double mouseX,
+        double mouseY,
+        double scrollY
+    ) {
+        var minecraft = Minecraft.getInstance();
+        if (minecraft.level == null) {
+            return false;
+        }
+
+        var screen = (EnchantmentScreen) (Object) this;
+        var options = deterministicEnchanting$options(screen.getMenu().getSlot(0).getItem());
+        var contentHeight = deterministicEnchanting$contentHeight(options, options.size());
+        var maxScroll = Math.max(0, contentHeight - (PANEL_HEIGHT - PANEL_PADDING * 2));
+        var panelX = deterministicEnchanting$panelX(minecraft.getWindow().getGuiScaledWidth());
+        var panelY = Math.max(4, (minecraft.getWindow().getGuiScaledHeight() - PANEL_HEIGHT) / 2);
+        if (maxScroll == 0 || mouseX < panelX || mouseX >= panelX + PANEL_WIDTH
+            || mouseY < panelY || mouseY >= panelY + PANEL_HEIGHT) {
+            return false;
+        }
+
+        deterministicEnchanting$scrollOffset = (int) Math.max(
+            0,
+            Math.min(maxScroll, deterministicEnchanting$scrollOffset - Math.round(scrollY * SCROLL_STEP))
+        );
+        return true;
     }
 
     @Unique
