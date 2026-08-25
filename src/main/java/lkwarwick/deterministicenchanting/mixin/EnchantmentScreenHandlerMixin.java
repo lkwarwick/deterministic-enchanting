@@ -55,6 +55,7 @@ public class EnchantmentScreenHandlerMixin {
     ) {
         var registry = access.lookupOrThrow(Registries.ENCHANTMENT);
         Map<String, Integer> requiredPowers = new LinkedHashMap<>();
+        Map<String, Integer> experienceCosts = new LinkedHashMap<>();
         Map<String, EnchantmentState> states = new LinkedHashMap<>();
         int[] bookshelfPower = {0};
 
@@ -77,30 +78,34 @@ public class EnchantmentScreenHandlerMixin {
                 var name = definition.description().getString();
                 var key = name + " " + level;
                 var requiredPower = minimumBookshelfPower(definition, level);
+                var experienceCost = deterministicExperienceCost(definition, level);
 
                 requiredPowers.putIfAbsent(key, requiredPower);
+                experienceCosts.putIfAbsent(key, experienceCost);
                 states.putIfAbsent(
                     key,
-                    stateFor(enchantment, itemStack, requiredPower, bookshelfPower[0], deterministicEnchanting$player, enchantmentCost)
+                    stateFor(enchantment, itemStack, requiredPower, bookshelfPower[0], deterministicEnchanting$player, experienceCost)
                 );
             }
         });
 
         if (slot == 0) {
             DeterministicEnchanting.LOGGER.info(
-                "Discovered {} deterministic enchantment options (bookshelf power: {}, vanilla cost for slot 0: {}, item: {})",
+                "Discovered {} deterministic enchantment options (bookshelf power: {}, player level: {}, vanilla cost for slot 0: {}, item: {})",
                 requiredPowers.size(),
                 bookshelfPower[0],
+                deterministicEnchanting$player == null ? "unknown" : deterministicEnchanting$player.experienceLevel,
                 enchantmentCost,
                 itemStack.getItem()
             );
 
             requiredPowers.forEach((name, requiredPower) ->
                 DeterministicEnchanting.LOGGER.info(
-                    "  {} -> state {}, minimum bookshelf power {}",
+                    "  {} -> state {}, minimum bookshelf power {}, deterministic cost {}",
                     name,
                     states.get(name),
-                    requiredPower
+                    requiredPower,
+                    experienceCosts.get(name)
                 )
             );
         }
@@ -112,7 +117,7 @@ public class EnchantmentScreenHandlerMixin {
         int requiredBookshelfPower,
         int bookshelfPower,
         Player player,
-        int enchantmentCost
+        int experienceCost
     ) {
         var currentLevel = EnchantmentHelper.getItemEnchantmentLevel(enchantment.enchantment(), itemStack);
         if (currentLevel >= enchantment.level()) {
@@ -123,15 +128,19 @@ public class EnchantmentScreenHandlerMixin {
             return EnchantmentState.INSUFFICIENT_BOOKSHELVES;
         }
 
+        if (player != null && !player.hasInfiniteMaterials() && player.experienceLevel < experienceCost) {
+            return EnchantmentState.INSUFFICIENT_LEVELS;
+        }
+
         if (currentLevel > 0) {
             return EnchantmentState.UPGRADE_AVAILABLE;
         }
 
-        if (player != null && !player.hasInfiniteMaterials() && player.experienceLevel < enchantmentCost) {
-            return EnchantmentState.INSUFFICIENT_LEVELS;
-        }
-
         return EnchantmentState.COMPATIBLE;
+    }
+
+    private static int deterministicExperienceCost(net.minecraft.world.item.enchantment.Enchantment enchantment, int level) {
+        return enchantment.getMinCost(level);
     }
 
     private static int minimumBookshelfPower(net.minecraft.world.item.enchantment.Enchantment enchantment, int level) {
