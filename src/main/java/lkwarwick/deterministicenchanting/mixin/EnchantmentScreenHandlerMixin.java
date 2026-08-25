@@ -1,21 +1,22 @@
 package lkwarwick.deterministicenchanting.mixin;
 
-import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.inventory.ContainerLevelAccess;
 import net.minecraft.world.inventory.EnchantmentMenu;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.EnchantingTableBlock;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.EnchantmentInstance;
 import lkwarwick.deterministicenchanting.DeterministicEnchanting;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.LinkedHashMap;
@@ -28,10 +29,14 @@ public class EnchantmentScreenHandlerMixin {
     @Final
     private ContainerLevelAccess access;
 
+    @Unique
+    private Player deterministicEnchanting$player;
+
     private enum EnchantmentState {
         COMPATIBLE,
         INSUFFICIENT_BOOKSHELVES,
         ALREADY_PRESENT,
+        UPGRADE_AVAILABLE,
         INSUFFICIENT_LEVELS,
         INCOMPATIBLE
     }
@@ -61,25 +66,25 @@ public class EnchantmentScreenHandlerMixin {
             }
         });
 
-        for (int power = 1; power <= 30; power++) {
-            var available = EnchantmentHelper.getAvailableEnchantmentResults(
-                power,
-                itemStack,
-                registry.listElements().map(
-                    holder -> (Holder<Enchantment>) holder
-                )
-            );
-
-            for (var enchantment : available) {
-                var name = enchantment.enchantment().value()
-                    .description()
-                    .getString();
-
-                var key = name + " " + enchantment.level();
-                requiredPowers.putIfAbsent(key, power);
-                states.putIfAbsent(key, stateFor(enchantment, itemStack, power, bookshelfPower[0]));
+        registry.listElements().forEach(holder -> {
+            var definition = holder.value();
+            if (!definition.canEnchant(itemStack)) {
+                return;
             }
-        }
+
+            for (int level = definition.getMinLevel(); level <= definition.getMaxLevel(); level++) {
+                var enchantment = new EnchantmentInstance(holder, level);
+                var name = definition.description().getString();
+                var key = name + " " + level;
+                var requiredPower = definition.getMinCost(level);
+
+                requiredPowers.putIfAbsent(key, requiredPower);
+                states.putIfAbsent(
+                    key,
+                    stateFor(enchantment, itemStack, requiredPower, bookshelfPower[0], deterministicEnchanting$player, enchantmentCost)
+                );
+            }
+        });
 
         DeterministicEnchanting.LOGGER.info(
             "Discovered {} deterministic enchantment options for slot {} (bookshelf power: {}, vanilla cost: {}, item: {})",
@@ -104,9 +109,12 @@ public class EnchantmentScreenHandlerMixin {
         EnchantmentInstance enchantment,
         ItemStack itemStack,
         int requiredPower,
-        int bookshelfPower
+        int bookshelfPower,
+        Player player,
+        int enchantmentCost
     ) {
-        if (EnchantmentHelper.getItemEnchantmentLevel(enchantment.enchantment(), itemStack) > 0) {
+        var currentLevel = EnchantmentHelper.getItemEnchantmentLevel(enchantment.enchantment(), itemStack);
+        if (currentLevel >= enchantment.level()) {
             return EnchantmentState.ALREADY_PRESENT;
         }
 
@@ -114,6 +122,27 @@ public class EnchantmentScreenHandlerMixin {
             return EnchantmentState.INSUFFICIENT_BOOKSHELVES;
         }
 
+        if (currentLevel > 0) {
+            return EnchantmentState.UPGRADE_AVAILABLE;
+        }
+
+        if (player != null && !player.hasInfiniteMaterials() && player.experienceLevel < enchantmentCost) {
+            return EnchantmentState.INSUFFICIENT_LEVELS;
+        }
+
         return EnchantmentState.COMPATIBLE;
+    }
+
+    @Inject(method = "stillValid", at = @At("HEAD"))
+    private void rememberPlayer(Player player, CallbackInfoReturnable<Boolean> cir) {
+        deterministicEnchanting$player = player;
+    }
+
+    @Redirect(
+        method = "slotsChanged",
+        at = @At(value = "INVOKE", target = "Lnet/minecraft/world/item/ItemStack;isEnchantable()Z")
+    )
+    private boolean allowAlreadyEnchantedItems(ItemStack itemStack) {
+        return itemStack.isEnchantable() || itemStack.isEnchanted();
     }
 }
