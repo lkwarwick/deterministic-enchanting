@@ -233,7 +233,7 @@ public class DeterministicEnchantingScreenMixin implements DeterministicEnchanti
                         ? 0xFFE06C75
                         : state.equals("UPGRADE")
                             ? 0xFFE5C07B
-                            : 0xFF88C0D0;
+                                : 0xFF6FCF97;
                 return new DeterministicEnchanting$Option(
                     holder.unwrapKey().orElseThrow().identifier(),
                     level,
